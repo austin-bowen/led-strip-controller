@@ -5,7 +5,7 @@ from datetime import datetime
 from multiprocessing import RLock
 from numbers import Real
 from time import sleep
-from typing import Tuple, Container, Literal
+from typing import Tuple, Container, Literal, Optional
 
 import psutil
 from serial import Serial
@@ -18,7 +18,6 @@ class LEDStripController:
         self._conn = Serial(port=serial_port, baudrate=115200)
         self._lock = RLock()
         self._rgb = None
-        self.set_rgb(0, 0, 0)
 
     def __enter__(self) -> 'LEDStripController':
         return self
@@ -30,7 +29,8 @@ class LEDStripController:
         with self._lock:
             self._conn.close()
 
-    def get_rgb(self) -> Tuple[int, int, int]:
+    def get_rgb(self) -> Optional[Tuple[int, int, int]]:
+        """Returns a tuple of the current (red, green, blue) values, or None if they have not been set yet."""
         return self._rgb
 
     def set_rgb(self, red: Real, green: Real, blue: Real) -> None:
@@ -53,11 +53,18 @@ class LEDStripController:
             self._conn.flush()
             self._conn.read()
 
-    def fade_rgb(self, red: Real, green: Real, blue: Real, time_s: Real, step_time_s: Real = 0.2):
+    def fade_rgb(self, red: Real, green: Real, blue: Real, time_s: float, step_time_s: Real = 0.2):
+        # Get the current rgb values
+        current_rgb = self.get_rgb()
+
+        # This is the first time the colors are being set?
+        if current_rgb is None:
+            current_rgb = (red, green, blue)
+
         steps = max(1, int(time_s / step_time_s))
         sleep_time = time_s / steps
 
-        r, g, b = self.get_rgb()
+        r, g, b = current_rgb
         dr, dg, db = (red - r) / steps, (green - g) / steps, (blue - b) / steps
         for _ in range(steps):
             sleep(sleep_time)
@@ -81,7 +88,10 @@ def _get_cpu_percent() -> float:
 
 
 def _get_disk_percent() -> float:
-    usage = max(psutil.disk_usage(disk.mountpoint).percent for disk in psutil.disk_partitions())
+    parts = psutil.disk_partitions()
+    parts = filter(lambda part: 'ro' not in part.opts.split(','), parts)
+    usages = map(lambda part: psutil.disk_usage(part.mountpoint).percent, parts)
+    usage = max(usages)
     print(f'    Disk usage: {round(usage):3}%', end='')
     return usage
 
@@ -95,9 +105,9 @@ def _get_memory_percent() -> float:
 def show_rainbow(leds: LEDStripController, time_s: Real = 30, step_time_s: Real = 0.2):
     leds.set_rgb(255, 1, 1)
     while True:
-        leds.fade_rgb(1, 255, 1, time_s, step_time_s=step_time_s)
-        leds.fade_rgb(1, 1, 255, time_s, step_time_s=step_time_s)
-        leds.fade_rgb(255, 1, 1, time_s, step_time_s=step_time_s)
+        leds.fade_rgb(1, 255, 1, time_s / 3, step_time_s=step_time_s)
+        leds.fade_rgb(1, 1, 255, time_s / 3, step_time_s=step_time_s)
+        leds.fade_rgb(255, 1, 1, time_s / 3, step_time_s=step_time_s)
 
 
 def show_system_load(
@@ -123,7 +133,10 @@ def show_system_load(
         print()
 
         value = max_usage * 255 / 100
-        leds.fade_rgb(value, 0, 255 - value, update_interval_s)
+        r, g, b = value, 0, 255 - value
+        leds.fade_rgb(r, g, b, update_interval_s / 2)
+        # leds.fade_rgb(value / 2, 0, (255 - value) / 2, update_interval_s / 2)
+        leds.fade_rgb(min(r, 20), g, min(b, 20), update_interval_s / 2)
 
 
 def manual_control(leds: LEDStripController) -> None:
